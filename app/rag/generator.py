@@ -8,9 +8,11 @@ client = AsyncOpenAI(
 )
 
 
-async def generate_embedding(text: str) -> list[float]:
+async def generate_embedding(
+    text: str,
+) -> list[float]:
     response = await client.embeddings.create(
-        model="text-embedding-3-small",
+        model=settings.embedding_model,
         input=text,
     )
 
@@ -22,29 +24,38 @@ async def generate_answer(
     context: str,
 ) -> str:
     prompt = f"""
-You are an AI assistant that answers questions using the provided
-document context.
+You are an AI assistant inside a document intelligence platform.
 
-Document context:
+Use the supplied document context and conversation history
+to answer the user's question.
+
+DOCUMENT AND CONVERSATION CONTEXT:
 {context}
 
-User question:
+USER QUESTION:
 {question}
 
-Instructions:
-- Answer using the provided context.
-- If the context does not contain enough information, say so.
-- Do not invent facts.
-- Give a clear and concise answer.
+Rules:
+- Use the supplied context whenever possible.
+- Do not invent information.
+- If the context does not contain enough information, say that clearly.
+- Give a direct and useful answer.
 """
 
     response = await client.chat.completions.create(
         model=settings.openai_model,
         messages=[
             {
+                "role": "system",
+                "content": (
+                    "You answer questions accurately using "
+                    "provided context."
+                ),
+            },
+            {
                 "role": "user",
                 "content": prompt,
-            }
+            },
         ],
     )
 

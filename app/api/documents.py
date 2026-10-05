@@ -1,4 +1,11 @@
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    UploadFile,
+)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,11 +26,13 @@ async def upload_document(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ):
-    user_result = await db.execute(
-        select(User).where(User.id == user_id)
+    result = await db.execute(
+        select(User).where(
+            User.id == user_id
+        )
     )
 
-    user = user_result.scalar_one_or_none()
+    user = result.scalar_one_or_none()
 
     if user is None:
         raise HTTPException(
@@ -76,8 +85,12 @@ async def get_user_documents(
 ):
     result = await db.execute(
         select(Document)
-        .where(Document.user_id == user_id)
-        .order_by(Document.created_at.desc())
+        .where(
+            Document.user_id == user_id
+        )
+        .order_by(
+            Document.created_at.desc()
+        )
     )
 
     documents = result.scalars().all()

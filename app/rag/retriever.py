@@ -1,86 +1,14 @@
 import json
 import math
 
-import pymupdf
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import DocumentChunk
+from app.documents.chunker import chunk_text
+from app.documents.embeddings import create_embeddings
+from app.documents.loader import load_pdf
 from app.rag.generator import generate_embedding
-
-
-def extract_pdf_text(file_bytes: bytes) -> str:
-    document = pymupdf.open(
-        stream=file_bytes,
-        filetype="pdf",
-    )
-
-    pages = []
-
-    for page in document:
-        text = page.get_text()
-
-        if text.strip():
-            pages.append(text.strip())
-
-    document.close()
-
-    return "\n\n".join(pages)
-
-
-def chunk_text(
-    text: str,
-    chunk_size: int = 1000,
-    overlap: int = 200,
-) -> list[str]:
-    if not text.strip():
-        return []
-
-    words = text.split()
-
-    chunks = []
-    start = 0
-
-    while start < len(words):
-        end = start + chunk_size
-
-        chunk = " ".join(words[start:end]).strip()
-
-        if chunk:
-            chunks.append(chunk)
-
-        if end >= len(words):
-            break
-
-        start = end - overlap
-
-    return chunks
-
-
-async def ingest_document(
-    db: AsyncSession,
-    document_id: int,
-    file_bytes: bytes,
-) -> int:
-    text = extract_pdf_text(file_bytes)
-
-    chunks = chunk_text(text)
-
-    for index, chunk in enumerate(chunks):
-        embedding = await generate_embedding(chunk)
-
-        document_chunk = DocumentChunk(
-            document_id=document_id,
-            content=chunk,
-            chunk_index=index,
-            embedding=json.dumps(embedding),
-        )
-
-        db.add(document_chunk)
-
-    await db.commit()
-
-    return len(chunks)
 
 
 def cosine_similarity(
@@ -94,8 +22,8 @@ def cosine_similarity(
         return 0.0
 
     dot_product = sum(
-        first_value * second_value
-        for first_value, second_value in zip(first, second)
+        a * b
+        for a, b in zip(first, second)
     )
 
     first_norm = math.sqrt(
@@ -109,7 +37,45 @@ def cosine_similarity(
     if first_norm == 0 or second_norm == 0:
         return 0.0
 
-    return dot_product / (first_norm * second_norm)
+    return dot_product / (
+        first_norm * second_norm
+    )
+
+
+async def ingest_document(
+    db: AsyncSession,
+    document_id: int,
+    file_bytes: bytes,
+) -> int:
+    text = load_pdf(file_bytes)
+
+    chunks = chunk_text(text)
+
+    if not chunks:
+        return 0
+
+    embeddings = await create_embeddings(chunks)
+
+    for index, (
+        chunk,
+        embedding,
+    ) in enumerate(
+        zip(chunks, embeddings)
+    ):
+        db.add(
+            DocumentChunk(
+                document_id=document_id,
+                content=chunk,
+                chunk_index=index,
+                embedding=json.dumps(
+                    embedding
+                ),
+            )
+        )
+
+    await db.commit()
+
+    return len(chunks)
 
 
 async def retrieve_chunks(
@@ -117,7 +83,9 @@ async def retrieve_chunks(
     question: str,
     limit: int = 5,
 ) -> list[DocumentChunk]:
-    question_embedding = await generate_embedding(question)
+    question_embedding = await generate_embedding(
+        question
+    )
 
     result = await db.execute(
         select(DocumentChunk).where(
@@ -133,7 +101,9 @@ async def retrieve_chunks(
         if not chunk.embedding:
             continue
 
-        embedding = json.loads(chunk.embedding)
+        embedding = json.loads(
+            chunk.embedding
+        )
 
         score = cosine_similarity(
             question_embedding,
@@ -165,6 +135,9 @@ async def build_context(
         question=question,
         limit=limit,
     )
+
+    if not chunks:
+        return "No relevant document context was found."
 
     return "\n\n---\n\n".join(
         chunk.content

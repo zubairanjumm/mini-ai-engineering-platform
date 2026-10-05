@@ -4,8 +4,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import get_db
-from app.db.models import Conversation, Message, User
-from app.langgraph.workflow import run_chat_workflow
+from app.db.models import (
+    Conversation,
+    Message,
+    User,
+)
+from app.graph.workflow import execute_workflow
 
 
 router = APIRouter(
@@ -28,11 +32,13 @@ async def create_conversation(
     request: ConversationRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    user_result = await db.execute(
-        select(User).where(User.id == request.user_id)
+    result = await db.execute(
+        select(User).where(
+            User.id == request.user_id
+        )
     )
 
-    user = user_result.scalar_one_or_none()
+    user = result.scalar_one_or_none()
 
     if user is None:
         raise HTTPException(
@@ -56,15 +62,21 @@ async def create_conversation(
     }
 
 
-@router.get("/conversations/user/{user_id}")
+@router.get(
+    "/conversations/user/{user_id}"
+)
 async def get_user_conversations(
     user_id: int,
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
         select(Conversation)
-        .where(Conversation.user_id == user_id)
-        .order_by(Conversation.created_at.desc())
+        .where(
+            Conversation.user_id == user_id
+        )
+        .order_by(
+            Conversation.created_at.desc()
+        )
     )
 
     conversations = result.scalars().all()
@@ -84,13 +96,14 @@ async def send_message(
     request: MessageRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    conversation_result = await db.execute(
+    result = await db.execute(
         select(Conversation).where(
-            Conversation.id == request.conversation_id
+            Conversation.id
+            == request.conversation_id
         )
     )
 
-    conversation = conversation_result.scalar_one_or_none()
+    conversation = result.scalar_one_or_none()
 
     if conversation is None:
         raise HTTPException(
@@ -113,9 +126,10 @@ async def send_message(
     )
 
     db.add(user_message)
+
     await db.commit()
 
-    answer = await run_chat_workflow(
+    answer = await execute_workflow(
         question=content,
         conversation_id=conversation.id,
         db=db,
@@ -130,7 +144,9 @@ async def send_message(
     db.add(assistant_message)
 
     await db.commit()
-    await db.refresh(assistant_message)
+    await db.refresh(
+        assistant_message
+    )
 
     return {
         "conversation_id": conversation.id,
@@ -140,31 +156,22 @@ async def send_message(
     }
 
 
-@router.get("/conversations/{conversation_id}/messages")
+@router.get(
+    "/conversations/{conversation_id}/messages"
+)
 async def get_conversation_messages(
     conversation_id: int,
     db: AsyncSession = Depends(get_db),
 ):
-    conversation_result = await db.execute(
-        select(Conversation).where(
-            Conversation.id == conversation_id
-        )
-    )
-
-    conversation = conversation_result.scalar_one_or_none()
-
-    if conversation is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Conversation not found",
-        )
-
     result = await db.execute(
         select(Message)
         .where(
-            Message.conversation_id == conversation_id
+            Message.conversation_id
+            == conversation_id
         )
-        .order_by(Message.created_at.asc())
+        .order_by(
+            Message.created_at.asc()
+        )
     )
 
     messages = result.scalars().all()

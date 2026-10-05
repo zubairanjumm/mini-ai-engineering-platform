@@ -3,7 +3,9 @@ from typing import TypedDict
 from langgraph.graph import END, START, StateGraph
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.memory.memory import build_conversation_context
+from app.memory.memory import (
+    build_conversation_context,
+)
 from app.rag.generator import generate_answer
 from app.rag.retriever import build_context
 
@@ -16,7 +18,7 @@ class ChatState(TypedDict):
     answer: str
 
 
-async def retrieve_context(
+async def retrieve_documents(
     state: ChatState,
     db: AsyncSession,
 ) -> ChatState:
@@ -51,7 +53,7 @@ async def retrieve_memory(
 async def generate_response(
     state: ChatState,
 ) -> ChatState:
-    prompt_context = f"""
+    context = f"""
 DOCUMENT CONTEXT:
 {state["context"]}
 
@@ -61,7 +63,7 @@ CONVERSATION HISTORY:
 
     answer = await generate_answer(
         question=state["question"],
-        context=prompt_context,
+        context=context,
     )
 
     return {
@@ -73,32 +75,32 @@ CONVERSATION HISTORY:
 def build_graph(
     db: AsyncSession,
 ):
-    async def retrieve_context_node(
+    async def document_node(
         state: ChatState,
     ) -> ChatState:
-        return await retrieve_context(
-            state=state,
-            db=db,
+        return await retrieve_documents(
+            state,
+            db,
         )
 
-    async def retrieve_memory_node(
+    async def memory_node(
         state: ChatState,
     ) -> ChatState:
         return await retrieve_memory(
-            state=state,
-            db=db,
+            state,
+            db,
         )
 
     graph = StateGraph(ChatState)
 
     graph.add_node(
-        "retrieve_context",
-        retrieve_context_node,
+        "retrieve_documents",
+        document_node,
     )
 
     graph.add_node(
         "retrieve_memory",
-        retrieve_memory_node,
+        memory_node,
     )
 
     graph.add_node(
@@ -108,11 +110,11 @@ def build_graph(
 
     graph.add_edge(
         START,
-        "retrieve_context",
+        "retrieve_documents",
     )
 
     graph.add_edge(
-        "retrieve_context",
+        "retrieve_documents",
         "retrieve_memory",
     )
 
@@ -136,7 +138,7 @@ async def run_chat_workflow(
 ) -> str:
     graph = build_graph(db)
 
-    initial_state: ChatState = {
+    state: ChatState = {
         "question": question,
         "conversation_id": conversation_id,
         "history": "",
@@ -144,6 +146,6 @@ async def run_chat_workflow(
         "answer": "",
     }
 
-    result = await graph.ainvoke(initial_state)
+    result = await graph.ainvoke(state)
 
     return result["answer"]

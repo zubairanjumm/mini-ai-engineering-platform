@@ -18,7 +18,9 @@ async def get_conversation_history(
         .limit(limit)
     )
 
-    messages = list(result.scalars().all())
+    messages = list(
+        result.scalars().all()
+    )
 
     messages.reverse()
 
@@ -43,7 +45,7 @@ async def build_conversation_context(
     )
 
     if not history:
-        return ""
+        return "No previous conversation."
 
     return "\n".join(
         f"{message['role']}: {message['content']}"
