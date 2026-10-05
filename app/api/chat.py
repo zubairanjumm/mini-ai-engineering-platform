@@ -1,15 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import get_db
 from app.db.models import Conversation, Message, User
+from app.langgraph.workflow import run_chat_workflow
 
 
 router = APIRouter(
     prefix="/api/chat",
-    tags=["Chat"],
+    tags=["chat"],
 )
 
 
@@ -18,29 +19,29 @@ class ConversationRequest(BaseModel):
 
 
 class MessageRequest(BaseModel):
-    role: str
+    conversation_id: int
     content: str
 
 
-@router.post("/conversations", status_code=status.HTTP_201_CREATED)
+@router.post("/conversations")
 async def create_conversation(
-    data: ConversationRequest,
+    request: ConversationRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(User).where(User.id == data.user_id)
+    user_result = await db.execute(
+        select(User).where(User.id == request.user_id)
     )
 
-    user = result.scalar_one_or_none()
+    user = user_result.scalar_one_or_none()
 
     if user is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found.",
+            status_code=404,
+            detail="User not found",
         )
 
     conversation = Conversation(
-        user_id=data.user_id,
+        user_id=request.user_id,
     )
 
     db.add(conversation)
@@ -78,57 +79,91 @@ async def get_user_conversations(
     ]
 
 
-@router.post(
-    "/conversations/{conversation_id}/messages",
-    status_code=status.HTTP_201_CREATED,
-)
-async def create_message(
-    conversation_id: int,
-    data: MessageRequest,
+@router.post("/messages")
+async def send_message(
+    request: MessageRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
+    conversation_result = await db.execute(
+        select(Conversation).where(
+            Conversation.id == request.conversation_id
+        )
+    )
+
+    conversation = conversation_result.scalar_one_or_none()
+
+    if conversation is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation not found",
+        )
+
+    content = request.content.strip()
+
+    if not content:
+        raise HTTPException(
+            status_code=400,
+            detail="Message cannot be empty",
+        )
+
+    user_message = Message(
+        conversation_id=conversation.id,
+        role="user",
+        content=content,
+    )
+
+    db.add(user_message)
+    await db.commit()
+
+    answer = await run_chat_workflow(
+        question=content,
+        conversation_id=conversation.id,
+        db=db,
+    )
+
+    assistant_message = Message(
+        conversation_id=conversation.id,
+        role="assistant",
+        content=answer,
+    )
+
+    db.add(assistant_message)
+
+    await db.commit()
+    await db.refresh(assistant_message)
+
+    return {
+        "conversation_id": conversation.id,
+        "question": content,
+        "answer": answer,
+        "message_id": assistant_message.id,
+    }
+
+
+@router.get("/conversations/{conversation_id}/messages")
+async def get_conversation_messages(
+    conversation_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    conversation_result = await db.execute(
         select(Conversation).where(
             Conversation.id == conversation_id
         )
     )
 
-    conversation = result.scalar_one_or_none()
+    conversation = conversation_result.scalar_one_or_none()
 
     if conversation is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Conversation not found.",
+            status_code=404,
+            detail="Conversation not found",
         )
 
-    message = Message(
-        conversation_id=conversation_id,
-        role=data.role,
-        content=data.content,
-    )
-
-    db.add(message)
-
-    await db.commit()
-    await db.refresh(message)
-
-    return {
-        "id": message.id,
-        "conversation_id": message.conversation_id,
-        "role": message.role,
-        "content": message.content,
-        "created_at": message.created_at,
-    }
-
-
-@router.get("/conversations/{conversation_id}/messages")
-async def get_messages(
-    conversation_id: int,
-    db: AsyncSession = Depends(get_db),
-):
     result = await db.execute(
         select(Message)
-        .where(Message.conversation_id == conversation_id)
+        .where(
+            Message.conversation_id == conversation_id
+        )
         .order_by(Message.created_at.asc())
     )
 
@@ -137,7 +172,6 @@ async def get_messages(
     return [
         {
             "id": message.id,
-            "conversation_id": message.conversation_id,
             "role": message.role,
             "content": message.content,
             "created_at": message.created_at,
